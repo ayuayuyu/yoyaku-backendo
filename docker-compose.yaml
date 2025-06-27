@@ -1,0 +1,58 @@
+services:
+  yoyaku:
+    container_name: 401-yoyaku
+    build: # ビルドに使うDockerファイルのパス
+      context: .
+      dockerfile: ./build/go/Dockerfile
+    volumes: # マウントディレクトリ
+      - ./src:/go/src/app
+    ports:
+      - '${PORT:-8080}:${PORT:-8080}' # 環境変数 PORT を使用し、デフォルトは 4000 に設定
+    environment:
+      - PORT=${PORT:-8080} # コンテナ内の環境変数として設定
+      - DATABASE_URL=${DATABASE_URL}
+    tty: true # コンテナの永続化
+    env_file: # .envファイル
+      - .env
+      # depends_onを詳細なオブジェクト形式で記述
+    depends_on:
+      db:
+        # dbコンテナが「healthy」状態になるまで起動を待つ
+        condition: service_healthy
+    networks:
+      - private-net
+  db:
+    image: mysql:8
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: app
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD} #初期パスワード　
+      TZ: Asia/Tokyo #日本時間に設定
+    ports:
+      - 53306:3306 #内部のポート　：　外部のポート
+    # volumes:
+    #   - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql #ホスト上のファイルをDocker上に保存する
+    healthcheck:
+      # mysqladmin pingコマンドでMySQLサーバーが応答するかをチェック
+      test:
+        [
+          'CMD',
+          'mysqladmin',
+          'ping',
+          '-h',
+          'localhost',
+          '-u',
+          'root',
+          '-p$$MYSQL_ROOT_PASSWORD',
+        ]
+      interval: 10s # チェックの間隔
+      timeout: 5s # タイムアウト
+      retries: 5 # リトライ回数
+      start_period: 30s # 起動してからチェックを開始するまでの猶予期間
+    networks:
+      - private-net
+
+networks:
+  private-net:
+    driver: bridge
