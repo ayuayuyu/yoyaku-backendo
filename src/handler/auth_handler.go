@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"yoyaku/auth"
 
 	"github.com/gin-gonic/gin"
@@ -13,12 +14,10 @@ import (
 
 // Googleから返ってくるユーザー情報の構造体
 type GoogleUserInfo struct {
-	ID         string `json:"id"`
-	Email      string `json:"email"`
-	Name       string `json:"name"`        // フルネーム
-	GivenName  string `json:"given_name"`  // 名
-	FamilyName string `json:"family_name"` // 姓
-	Picture    string `json:"picture"`     // プロフィール画像のURL
+	ID      string `json:"id"`
+	Email   string `json:"email"`
+	Name    string `json:"name"`    // フルネーム
+	Picture string `json:"picture"` // プロフィール画像のURL
 }
 
 // (変更) HandleGoogleCallbackはセッションに情報を保存し、フロントエンドにリダイレクトする
@@ -41,6 +40,13 @@ func HandleGoogleCallback(c *gin.Context) {
 	if err := json.Unmarshal(content, &userInfo); err != nil {
 		log.Println("JSON Unmarshal error:", err)
 		c.Redirect(http.StatusTemporaryRedirect, "http://localhost:3000/login?error=true")
+		return
+	}
+
+	// pluslab.org以外は拒否
+	if !strings.HasSuffix(userInfo.Email, "@pluslab.org") {
+		log.Println("Unauthorized domain access attempt:", userInfo.Email)
+		c.Redirect(http.StatusTemporaryRedirect, "http://localhost:3000/login?error=domain")
 		return
 	}
 

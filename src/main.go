@@ -24,7 +24,7 @@ func main() {
 		log.Fatalf("データベースに接続できませんでした: %v", err)
 	}
 	defer sqlDB.Close()
-	// *sql.DBからsqlcのクエリオブジェクトを生成します
+	// sql.DBからsqlcのクエリオブジェクトを生成
 	queries := db.New(sqlDB)
 
 	// 1. OAuth設定の初期化
