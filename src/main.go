@@ -1,11 +1,9 @@
 package main
 
 import (
-	"context"
-	"database/sql"
 	"log"
-	"net/http"
 	"os"
+
 	"yoyaku/auth"
 	"yoyaku/db"
 	"yoyaku/handler"
@@ -57,29 +55,31 @@ func main() {
 		c.Next()
 	})
 
-	r.GET("/", func(c *gin.Context) {
-		// GORMの`db.Create`の代わりに、sqlcが生成したメソッドを使います
-		// 例として、authorsテーブルに新しいレコードを作成します
-		createdAuthor, err := queries.CreateAuthor(context.Background(), db.CreateAuthorParams{
-			Name: "Gin Framework",
-			Bio:  sql.NullString{String: "A web framework written in Go.", Valid: true},
-		})
-		if err != nil {
-			// エラーが発生した場合は、サーバーエラーを返します
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create author"})
-			return
-		}
+	// r.GET("/", func(c *gin.Context) {
+	// 	// GORMの`db.Create`の代わりに、sqlcが生成したメソッドを使います
+	// 	// 例として、authorsテーブルに新しいレコードを作成します
+	// 	createdAuthor, err := queries.CreateAuthor(context.Background(), db.CreateAuthorParams{
+	// 		Name: "Gin Framework",
+	// 		Bio:  sql.NullString{String: "A web framework written in Go.", Valid: true},
+	// 	})
+	// 	if err != nil {
+	// 		// エラーが発生した場合は、サーバーエラーを返します
+	// 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create author"})
+	// 		return
+	// 	}
 
-		// 成功した場合は、作成されたデータを含むJSONを返します
-		c.JSON(http.StatusOK, gin.H{
-			"message":        "Hello Database, author created!",
-			"created_author": createdAuthor,
-		})
-	})
+	// 	// 成功した場合は、作成されたデータを含むJSONを返します
+	// 	c.JSON(http.StatusOK, gin.H{
+	// 		"message":        "Hello Database, author created!",
+	// 		"created_author": createdAuthor,
+	// 	})
+	// })
 
 	// 3. ルーティングの設定
 	r.GET("/login", handler.HandleGoogleLogin)
-	r.GET("/callback", handler.HandleGoogleCallback)
+	r.GET("/callback", func(c *gin.Context) {
+		handler.HandleGoogleCallback(c, queries)
+	})
 
 	// フロントエンドがユーザー情報を確認するためのAPIエンドポイント
 	api := r.Group("/api")

@@ -1,12 +1,16 @@
 package handler
 
 import (
+	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"yoyaku/auth"
+	"yoyaku/db"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/sessions"
@@ -16,74 +20,104 @@ import (
 type GoogleUserInfo struct {
 	ID      string `json:"id"`
 	Email   string `json:"email"`
-	Name    string `json:"name"`    // フルネーム
-	Picture string `json:"picture"` // プロフィール画像のURL
+	Name    string `json:"name"`
+	Picture string `json:"picture"`
 }
 
-// (変更) HandleGoogleCallbackはセッションに情報を保存し、フロントエンドにリダイレクトする
-func HandleGoogleCallback(c *gin.Context) {
+// GoogleのOAuthコールバックハンドラ
+func HandleGoogleCallback(c *gin.Context, queries *db.Queries) {
 	state := c.Query("state")
 	code := c.Query("code")
 
-	// ユーザー情報を取得
+	frontendUrl := os.Getenv("FRONTEND_URL")
+	if frontendUrl == "" {
+		log.Fatalf("環境変数 FRONTEND_URL が設定されていません")
+	}
+
+	// Googleからユーザー情報を取得
 	content, err := auth.GetUserInfo(state, code)
 	if err != nil {
 		log.Println(err.Error())
-		c.Redirect(http.StatusTemporaryRedirect, "http://localhost:3000/login?error=true")
+		c.Redirect(http.StatusTemporaryRedirect, frontendUrl+"/login?error=true")
 		return
 	}
 
-	//デバッグ用：Googleから返ってきたJSONをそのまま出力
-	fmt.Println("Response from Google:", string(content))
-	// ユーザー情報をパース
+	// JSONをパース
 	var userInfo GoogleUserInfo
 	if err := json.Unmarshal(content, &userInfo); err != nil {
 		log.Println("JSON Unmarshal error:", err)
-		c.Redirect(http.StatusTemporaryRedirect, "http://localhost:3000/login?error=true")
+		c.Redirect(http.StatusTemporaryRedirect, frontendUrl+"/login?error=true")
 		return
 	}
 
-	// pluslab.org以外は拒否
+	// pluslab.org ドメインのみ許可
 	if !strings.HasSuffix(userInfo.Email, "@pluslab.org") {
 		log.Println("Unauthorized domain access attempt:", userInfo.Email)
-		c.Redirect(http.StatusTemporaryRedirect, "http://localhost:3000/login?error=domain")
+		c.Redirect(http.StatusTemporaryRedirect, frontendUrl+"/login?error=domain")
 		return
 	}
 
-	// セッションを取得
+	// ユーザー取得または作成
+	dbUser, err := queries.GetUserByGoogleID(context.Background(), userInfo.ID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			// 新規作成
+			params := db.CreateUserParams{
+				Name:      userInfo.Name,
+				Email:     userInfo.Email,
+				GoogleID:  userInfo.ID,
+				AvatarUrl: sql.NullString{String: userInfo.Picture, Valid: userInfo.Picture != ""},
+				Role:      "user",
+			}
+			if _, err := queries.CreateUser(context.Background(), params); err != nil {
+				log.Println("ユーザー作成エラー:", err)
+				c.Redirect(http.StatusTemporaryRedirect, frontendUrl+"/login?error=create")
+				return
+			}
+			// 再取得
+			dbUser, err = queries.GetUserByGoogleID(context.Background(), userInfo.ID)
+			if err != nil {
+				log.Println("作成後のユーザー取得失敗:", err)
+				c.Redirect(http.StatusTemporaryRedirect, frontendUrl+"/login?error=true")
+				return
+			}
+		} else {
+			log.Println("DBユーザー検索エラー:", err)
+			c.Redirect(http.StatusTemporaryRedirect, frontendUrl+"/login?error=true")
+			return
+		}
+	}
+
+	// セッションに保存
 	store := c.MustGet("session_store").(*sessions.CookieStore)
 	session, _ := store.Get(c.Request, "session-name")
 
-	// セッションにユーザー情報を保存
-	session.Values["user_id"] = userInfo.ID
-	session.Values["user_email"] = userInfo.Email
-	session.Values["user_name"] = userInfo.Name
-	session.Values["user_picture"] = userInfo.Picture
+	session.Values["user_id"] = fmt.Sprintf("%d", dbUser.ID) // int64 → string
+	session.Values["user_email"] = dbUser.Email
+	session.Values["user_name"] = dbUser.Name
+	session.Values["user_picture"] = dbUser.AvatarUrl.String
 
-	fmt.Printf("user_id: %s, user_email: %s, user_name: %s, user_picture: %s", session.Values["user_id"], session.Values["user_email"], session.Values["user_name"], session.Values["user_picture"])
 	if err := session.Save(c.Request, c.Writer); err != nil {
-		log.Println("Session save error:", err)
-		c.Redirect(http.StatusTemporaryRedirect, "http://localhost:3000/login?error=true")
+		log.Println("セッション保存失敗:", err)
+		c.Redirect(http.StatusTemporaryRedirect, frontendUrl+"/login?error=true")
 		return
 	}
 
-	// ログイン成功後、フロントエンドのトップページにリダイレクト
-	c.Redirect(http.StatusPermanentRedirect, "http://localhost:3000/")
+	// フロントエンドへリダイレクト
+	c.Redirect(http.StatusPermanentRedirect, frontendUrl)
 }
 
-// (新規) HandleGetMeは現在のユーザー情報を返すAPI
+// 現在のユーザー情報を返す
 func HandleGetMe(c *gin.Context) {
 	store := c.MustGet("session_store").(*sessions.CookieStore)
 	session, _ := store.Get(c.Request, "session-name")
 
-	// セッションにユーザー情報がなければ未認証エラー
 	userID, ok := session.Values["user_id"].(string)
 	if !ok || userID == "" {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return
 	}
 
-	// ユーザー情報をJSONで返す
 	c.JSON(http.StatusOK, gin.H{
 		"id":      userID,
 		"email":   session.Values["user_email"],
@@ -92,14 +126,13 @@ func HandleGetMe(c *gin.Context) {
 	})
 }
 
-// (新規) HandleLogoutはセッションを破棄してログアウトさせる
+// ログアウト処理
 func HandleLogout(c *gin.Context) {
 	store := c.MustGet("session_store").(*sessions.CookieStore)
 	session, _ := store.Get(c.Request, "session-name")
 
-	// セッション情報をクリア
 	session.Values["user_id"] = ""
-	session.Options.MaxAge = -1 // Cookieを即時削除
+	session.Options.MaxAge = -1
 
 	if err := session.Save(c.Request, c.Writer); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to logout"})
@@ -109,7 +142,7 @@ func HandleLogout(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "logged out"})
 }
 
-// (元のHandleGoogleLoginは変更なしでOK)
+// Googleログイン開始
 func HandleGoogleLogin(c *gin.Context) {
 	url := auth.GoogleOauthConfig.AuthCodeURL(auth.OauthStateString)
 	c.Redirect(http.StatusTemporaryRedirect, url)
