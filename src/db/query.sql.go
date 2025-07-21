@@ -11,11 +11,49 @@ import (
 	"time"
 )
 
+const canceledReservationByID = `-- name: CanceledReservationByID :exec
+UPDATE reservations
+SET
+  status = 'canceled',
+  updated_at = CURRENT_TIMESTAMP
+WHERE
+  user_id = ? AND id = ?
+`
+
+type CanceledReservationByIDParams struct {
+	UserID uint64 `json:"user_id"`
+	ID     uint64 `json:"id"`
+}
+
+func (q *Queries) CanceledReservationByID(ctx context.Context, arg CanceledReservationByIDParams) error {
+	_, err := q.db.ExecContext(ctx, canceledReservationByID, arg.UserID, arg.ID)
+	return err
+}
+
+const checkOverlappingReservation = `-- name: CheckOverlappingReservation :one
+SELECT COUNT(*) FROM reservations
+WHERE status = 'confirmed'
+  AND start_time < ?
+  AND end_time > ?
+`
+
+type CheckOverlappingReservationParams struct {
+	StartTime time.Time `json:"start_time"`
+	EndTime   time.Time `json:"end_time"`
+}
+
+func (q *Queries) CheckOverlappingReservation(ctx context.Context, arg CheckOverlappingReservationParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, checkOverlappingReservation, arg.StartTime, arg.EndTime)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createReservation = `-- name: CreateReservation :execresult
 INSERT INTO reservations (
     user_id, title, start_time, end_time, status
 ) VALUES (
-    ?, ?, ?, ?, 'active'
+    ?, ?, ?, ?, 'confirmed'
 )
 `
 
@@ -63,11 +101,17 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (sql.Res
 
 const deleteReservationByID = `-- name: DeleteReservationByID :exec
 DELETE FROM reservations
-WHERE id = ?
+WHERE user_id = ? 
+  AND id = ?
 `
 
-func (q *Queries) DeleteReservationByID(ctx context.Context, id uint64) error {
-	_, err := q.db.ExecContext(ctx, deleteReservationByID, id)
+type DeleteReservationByIDParams struct {
+	UserID uint64 `json:"user_id"`
+	ID     uint64 `json:"id"`
+}
+
+func (q *Queries) DeleteReservationByID(ctx context.Context, arg DeleteReservationByIDParams) error {
+	_, err := q.db.ExecContext(ctx, deleteReservationByID, arg.UserID, arg.ID)
 	return err
 }
 
@@ -78,6 +122,27 @@ WHERE id = ?
 
 func (q *Queries) GetReservationByID(ctx context.Context, id uint64) (Reservation, error) {
 	row := q.db.QueryRowContext(ctx, getReservationByID, id)
+	var i Reservation
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.Title,
+		&i.StartTime,
+		&i.EndTime,
+		&i.Status,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getReservationLastInserted = `-- name: GetReservationLastInserted :one
+SELECT id, user_id, title, start_time, end_time, status, created_at, updated_at FROM reservations
+WHERE id = LAST_INSERT_ID()
+`
+
+func (q *Queries) GetReservationLastInserted(ctx context.Context) (Reservation, error) {
+	row := q.db.QueryRowContext(ctx, getReservationLastInserted)
 	var i Reservation
 	err := row.Scan(
 		&i.ID,
@@ -162,11 +227,21 @@ func (q *Queries) GetUserByID(ctx context.Context, id uint64) (User, error) {
 }
 
 const listReservationsByDate = `-- name: ListReservationsByDate :many
-SELECT r.id, r.user_id, r.title, r.start_time, r.end_time, r.status, r.created_at, r.updated_at, u.name
-FROM reservations r
-JOIN users u ON r.user_id = u.id
-WHERE DATE(r.start_time) = DATE(?)
+SELECT r.id, r.user_id, r.title, r.start_time, r.end_time, r.status, r.created_at, r.updated_at, u.name as user_name
+FROM reservations AS r
+JOIN users AS u ON r.user_id = u.id AND u.deleted_at IS NULL
+WHERE
+  r.status = 'confirmed'
+  AND r.start_time < ? 
+  AND r.end_time >= ? 
+ORDER BY
+  r.start_time
 `
+
+type ListReservationsByDateParams struct {
+	StartTime time.Time `json:"start_time"`
+	EndTime   time.Time `json:"end_time"`
+}
 
 type ListReservationsByDateRow struct {
 	ID        uint64    `json:"id"`
@@ -177,11 +252,11 @@ type ListReservationsByDateRow struct {
 	Status    string    `json:"status"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
-	Name      string    `json:"name"`
+	UserName  string    `json:"user_name"`
 }
 
-func (q *Queries) ListReservationsByDate(ctx context.Context, date time.Time) ([]ListReservationsByDateRow, error) {
-	rows, err := q.db.QueryContext(ctx, listReservationsByDate, date)
+func (q *Queries) ListReservationsByDate(ctx context.Context, arg ListReservationsByDateParams) ([]ListReservationsByDateRow, error) {
+	rows, err := q.db.QueryContext(ctx, listReservationsByDate, arg.StartTime, arg.EndTime)
 	if err != nil {
 		return nil, err
 	}
@@ -198,7 +273,7 @@ func (q *Queries) ListReservationsByDate(ctx context.Context, date time.Time) ([
 			&i.Status,
 			&i.CreatedAt,
 			&i.UpdatedAt,
-			&i.Name,
+			&i.UserName,
 		); err != nil {
 			return nil, err
 		}
@@ -214,11 +289,21 @@ func (q *Queries) ListReservationsByDate(ctx context.Context, date time.Time) ([
 }
 
 const listReservationsByMonth = `-- name: ListReservationsByMonth :many
-SELECT r.id, r.user_id, r.title, r.start_time, r.end_time, r.status, r.created_at, r.updated_at, u.name
-FROM reservations r
-JOIN users u ON r.user_id = u.id
-WHERE DATE_FORMAT(r.start_time, '%Y-%m') = DATE_FORMAT(?, '%Y-%m')
+SELECT r.id, r.user_id, r.title, r.start_time, r.end_time, r.status, r.created_at, r.updated_at, u.name as user_name
+FROM reservations AS r
+JOIN users AS u ON r.user_id = u.id AND u.deleted_at IS NULL
+WHERE
+  r.status = 'confirmed'
+  AND r.start_time < ?  -- 翌月の初日
+  AND r.end_time >= ? -- 月の初日
+ORDER BY
+  r.start_time
 `
+
+type ListReservationsByMonthParams struct {
+	StartTime time.Time `json:"start_time"`
+	EndTime   time.Time `json:"end_time"`
+}
 
 type ListReservationsByMonthRow struct {
 	ID        uint64    `json:"id"`
@@ -229,11 +314,11 @@ type ListReservationsByMonthRow struct {
 	Status    string    `json:"status"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
-	Name      string    `json:"name"`
+	UserName  string    `json:"user_name"`
 }
 
-func (q *Queries) ListReservationsByMonth(ctx context.Context, dateFORMAT time.Time) ([]ListReservationsByMonthRow, error) {
-	rows, err := q.db.QueryContext(ctx, listReservationsByMonth, dateFORMAT)
+func (q *Queries) ListReservationsByMonth(ctx context.Context, arg ListReservationsByMonthParams) ([]ListReservationsByMonthRow, error) {
+	rows, err := q.db.QueryContext(ctx, listReservationsByMonth, arg.StartTime, arg.EndTime)
 	if err != nil {
 		return nil, err
 	}
@@ -250,7 +335,7 @@ func (q *Queries) ListReservationsByMonth(ctx context.Context, dateFORMAT time.T
 			&i.Status,
 			&i.CreatedAt,
 			&i.UpdatedAt,
-			&i.Name,
+			&i.UserName,
 		); err != nil {
 			return nil, err
 		}
@@ -267,7 +352,8 @@ func (q *Queries) ListReservationsByMonth(ctx context.Context, dateFORMAT time.T
 
 const listReservationsByUserID = `-- name: ListReservationsByUserID :many
 SELECT id, user_id, title, start_time, end_time, status, created_at, updated_at FROM reservations
-WHERE user_id = ?
+WHERE status = 'confirmed'
+  AND user_id = ?
 ORDER BY start_time
 `
 
@@ -304,15 +390,20 @@ func (q *Queries) ListReservationsByUserID(ctx context.Context, userID uint64) (
 }
 
 const listReservationsByWeek = `-- name: ListReservationsByWeek :many
-SELECT r.id, r.user_id, r.title, r.start_time, r.end_time, r.status, r.created_at, r.updated_at, u.name
-FROM reservations r
-JOIN users u ON r.user_id = u.id
-WHERE r.start_time >= ? AND r.end_time <= ?
+SELECT r.id, r.user_id, r.title, r.start_time, r.end_time, r.status, r.created_at, r.updated_at, u.name as user_name
+FROM reservations AS r
+JOIN users AS u ON r.user_id = u.id AND u.deleted_at IS NULL
+WHERE
+  r.status = 'confirmed'
+  AND r.start_time < ?  
+  AND r.end_time >= ? 
+ORDER BY
+  r.start_time
 `
 
 type ListReservationsByWeekParams struct {
-	StartTime time.Time `json:"start_time"`
-	EndTime   time.Time `json:"end_time"`
+	Endtime   time.Time `json:"endtime"`
+	Starttime time.Time `json:"starttime"`
 }
 
 type ListReservationsByWeekRow struct {
@@ -324,11 +415,11 @@ type ListReservationsByWeekRow struct {
 	Status    string    `json:"status"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
-	Name      string    `json:"name"`
+	UserName  string    `json:"user_name"`
 }
 
 func (q *Queries) ListReservationsByWeek(ctx context.Context, arg ListReservationsByWeekParams) ([]ListReservationsByWeekRow, error) {
-	rows, err := q.db.QueryContext(ctx, listReservationsByWeek, arg.StartTime, arg.EndTime)
+	rows, err := q.db.QueryContext(ctx, listReservationsByWeek, arg.Endtime, arg.Starttime)
 	if err != nil {
 		return nil, err
 	}
@@ -345,7 +436,7 @@ func (q *Queries) ListReservationsByWeek(ctx context.Context, arg ListReservatio
 			&i.Status,
 			&i.CreatedAt,
 			&i.UpdatedAt,
-			&i.Name,
+			&i.UserName,
 		); err != nil {
 			return nil, err
 		}
