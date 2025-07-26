@@ -33,7 +33,7 @@ func Handlereservations(c *gin.Context, queries *db.Queries) {
 
 	// 重複チェック
 	count, err := queries.CheckOverlappingReservation(context.Background(), db.CheckOverlappingReservationParams{
-		StartTime: req.EndTime, // ← EndTimeがStartTime未満なら重複なし
+		StartTime: req.EndTime,
 		EndTime:   req.StartTime,
 	})
 
@@ -64,7 +64,6 @@ func Handlereservations(c *gin.Context, queries *db.Queries) {
 		return
 	}
 
-	// レスポンスとして返す
 	c.JSON(http.StatusOK, gin.H{
 		"status":     "success",
 		"id":         reservation.ID,
@@ -152,10 +151,8 @@ func HandlereservationsEdit(c *gin.Context, queries *db.Queries) {
 		return
 	}
 
-	// 文字列のIDをuint64に変換
 	id, err := strconv.ParseUint(idStr, 10, 64)
 	if err != nil {
-		// 変換に失敗した場合（例：IDが数値ではない）
 		c.JSON(http.StatusBadRequest, gin.H{"error": "IDの形式が正しくありません"})
 		return
 	}
@@ -177,7 +174,6 @@ func HandlereservationsEdit(c *gin.Context, queries *db.Queries) {
 	}
 
 	println("user_id", userID)
-	// 更新後の予約情報取得
 	updated, err := queries.GetReservationByID(context.Background(), id)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "更新後の予約取得に失敗しました"})
@@ -213,14 +209,11 @@ func HandlerListByMonth(c *gin.Context, queries *db.Queries) {
 
 	// 月の初日と最終日の翌日を計算
 	startOfMonth := t
-	endOfMonth := t.AddDate(0, 1, 0) // 翌月の初日
+	endOfMonth := t.AddDate(0, 1, 0)
 
-	// データベースクエリを実行
-	// 注意: パフォーマンスの良い日付範囲クエリの方を使用します。
-	// sqlcの引数名が start_time, end_time の逆になっている場合があるので、生成されたコードに合わせてください。
 	reservations, err := queries.ListReservationsByMonth(context.Background(), db.ListReservationsByMonthParams{
-		EndTime:   startOfMonth, // >= startOfMonth
-		StartTime: endOfMonth,   // < endOfMonth
+		EndTime:   startOfMonth,
+		StartTime: endOfMonth,
 	})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "予約の取得に失敗しました"})
@@ -258,7 +251,6 @@ func HandlerListByWeek(c *gin.Context, queries *db.Queries) {
 
 	endTime = endTime.AddDate(0, 0, 1)
 
-	// データベースクエリを実行
 	reservations, err := queries.ListReservationsByWeek(context.Background(), db.ListReservationsByWeekParams{
 		Starttime: startTime,
 		Endtime:   endTime,
@@ -272,7 +264,6 @@ func HandlerListByWeek(c *gin.Context, queries *db.Queries) {
 		reservations = []db.ListReservationsByWeekRow{}
 	}
 
-	// fmt.Printfはデバッグ用なので、本番では削除してもOK
 	fmt.Printf("reservations : %v", reservations)
 
 	c.JSON(http.StatusOK, gin.H{
@@ -295,14 +286,12 @@ func HandlerListByDate(c *gin.Context, queries *db.Queries) {
 		return
 	}
 
-	// ★ 1. 検索範囲を計算
-	startOfDay := date                // 指定日の開始時刻
-	endOfDay := date.AddDate(0, 0, 1) // 翌日の開始時刻
+	startOfDay := date
+	endOfDay := date.AddDate(0, 0, 1)
 
-	// ★ 2. データベースクエリを新しい引数で実行
 	reservations, err := queries.ListReservationsByDate(context.Background(), db.ListReservationsByDateParams{
-		StartTime: endOfDay,   // SQL内の r.start_time < ? に対応
-		EndTime:   startOfDay, // SQL内の r.end_time >= ? に対応
+		StartTime: endOfDay,
+		EndTime:   startOfDay,
 	})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "予約の取得に失敗しました"})

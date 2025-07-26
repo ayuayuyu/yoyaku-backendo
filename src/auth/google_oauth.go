@@ -18,8 +18,6 @@ var (
 	OauthStateString = "random" // 本番環境ではセッションごとにランダムな文字列を生成することを推奨します。
 )
 
-// Setup は、環境変数からOAuth2クライアントの設定を読み込みます。
-// main関数から最初に呼び出されることを想定しています。
 func Setup() error {
 	clientID := os.Getenv("GOOGLE_CLIENT_ID")
 	if clientID == "" {
@@ -41,13 +39,11 @@ func Setup() error {
 	return nil
 }
 
-// GetUserInfo は、stateとcodeを検証し、Googleからユーザー情報を取得します。
 func GetUserInfo(state string, code string) ([]byte, error) {
 	if state != OauthStateString {
 		return nil, fmt.Errorf("invalid oauth state")
 	}
 
-	// context.Background() を使用します。
 	token, err := GoogleOauthConfig.Exchange(context.Background(), code)
 	if err != nil {
 		return nil, fmt.Errorf("code exchange failed: %s", err.Error())
@@ -59,7 +55,6 @@ func GetUserInfo(state string, code string) ([]byte, error) {
 	}
 	defer response.Body.Close()
 
-	// io.ReadAll を使用します。
 	contents, err := io.ReadAll(response.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed reading response body: %s", err.Error())
